@@ -2,14 +2,22 @@ const express = require("express");
 const multer = require("multer");
 const JSZip = require("jszip");
 const cors = require("cors");
+const path = require("path");
 
 const app = express();
+
+// Allow UI to connect
 app.use(cors());
+
+// Serve UI from /public
 app.use(express.static("public"));
 
+// Multer memory storage for batch uploads
 const upload = multer({ storage: multer.memoryStorage() });
 
-// SSE connection for progress updates
+// ------------------------------
+// SSE (Server‑Sent Events) Setup
+// ------------------------------
 let progressClients = [];
 
 app.get("/progress", (req, res) => {
@@ -31,7 +39,9 @@ function sendProgress(msg) {
   progressClients.forEach(res => res.write(`data: ${msg}\n\n`));
 }
 
-// Batch processor
+// ------------------------------
+// Batch Processor
+// ------------------------------
 app.post("/process", upload.array("files"), async (req, res) => {
   try {
     if (!req.files || req.files.length === 0) {
@@ -44,14 +54,16 @@ app.post("/process", upload.array("files"), async (req, res) => {
     for (let i = 0; i < total; i++) {
       const file = req.files[i];
 
+      // Send progress update to UI
       sendProgress(`Processing ${i + 1} of ${total}: ${file.originalname}`);
 
-      // Placeholder for real processing
+      // Placeholder for real processing logic
       const processedBuffer = file.buffer;
 
       zip.file(file.originalname, processedBuffer);
 
-      await new Promise(r => setTimeout(r, 200)); // simulate work
+      // Simulate processing time
+      await new Promise(r => setTimeout(r, 150));
     }
 
     sendProgress("DONE");
@@ -72,5 +84,8 @@ app.post("/process", upload.array("files"), async (req, res) => {
   }
 });
 
+// ------------------------------
+// Start Server
+// ------------------------------
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`apt2u server running on port ${PORT}`));
