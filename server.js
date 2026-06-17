@@ -10,7 +10,7 @@ const os = require("os");
 
 const app = express();
 
-// ⭐ Serve UI
+// ⭐ THIS LINE MAKES THE UI WORK — DO NOT REMOVE
 app.use(cors());
 app.use(express.static(path.join(__dirname, "public")));
 
