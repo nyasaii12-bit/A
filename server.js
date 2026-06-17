@@ -1,154 +1,82 @@
-const express = require("express");
-const multer = require("multer");
-const unzipper = require("unzipper");
-const archiver = require("archiver");
-const cors = require("cors");
-const path = require("path");
-const { exec } = require("child_process");
-const fs = require("fs");
-const os = require("os");
+<script>
+  const consoleBox = document.getElementById("console");
+  const uploadStatus = document.getElementById("uploadStatus");
+  const processStatus = document.getElementById("processStatus");
 
-const app = express();
+  function log(msg) {
+    consoleBox.innerHTML += msg + "<br>";
+    consoleBox.scrollTop = consoleBox.scrollHeight;
+  }
 
-// ⭐ REQUIRED: This serves your UI again
-app.use(cors());
-app.use(express.static(path.join(__dirname, "public")));
+  // SSE for server processing progress
+  const evtSource = new EventSource("/progress");
+  evtSource.onmessage = (e) => {
+    const msg = e.data;
+    log(msg);
 
-const upload = multer({ storage: multer.memoryStorage() });
+    if (msg.startsWith("Processing")) {
+      // Format: "Processing X of Y :: filename"
+      const parts = msg.split(" :: ");
+      const progressPart = parts[0];
+      const fileName = parts[1] || "Unknown";
 
-// ------------------------------
-// SSE Progress Stream
-// ------------------------------
-let progressClients = [];
+      const nums = progressPart.split(" ");
+      const current = parseInt(nums[1]);
+      const total = parseInt(nums[3]);
+      const percent = (current / total) * 100;
 
-app.get("/progress", (req, res) => {
-  res.set({
-    "Content-Type": "text/event-stream",
-    "Cache-Control": "no-cache",
-    Connection: "keep-alive"
-  });
+      // ⭐ Clean, correct, no weird line breaks
+      processStatus.innerHTML =
+        `Processing: ${current} of ${total} (${percent.toFixed(1)}%)<br>` +
+        `Current file: ${fileName}`;
+    }
 
-  res.flushHeaders();
-  progressClients.push(res);
+    if (msg === "DONE") {
+      processStatus.textContent = "Processing complete!";
+    }
+  };
 
-  req.on("close", () => {
-    progressClients = progressClients.filter(c => c !== res);
-  });
-});
+  // Upload handler with progress
+  document.getElementById("uploadForm").onsubmit = async (e) => {
+    e.preventDefault();
 
-function sendProgress(msg) {
-  progressClients.forEach(res => res.write(`data: ${msg}\n\n`));
-}
+    const file = document.getElementById("zipfile").files[0];
+    if (!file) {
+      log("Please select a ZIP file.");
+      return;
+    }
 
-// ------------------------------
-// Helper: run FFmpeg
-// ------------------------------
-function runFFmpeg(inputPath, outputPath) {
-  return new Promise((resolve, reject) => {
-    const cmd =
-      `ffmpeg -y -i "${inputPath}" -af ` +
-      `"silenceremove=start_periods=1:start_silence=0.1:start_threshold=-40dB:` +
-      `stop_periods=1:stop_silence=0.1:stop_threshold=-40dB,` +
-      `dynaudnorm=f=75:g=15,` +
-      `aformat=sample_fmts=s16:sample_rates=44100" ` +
-      `"${outputPath}"`;
+    const formData = new FormData();
+    formData.append("zipfile", file);
 
-    exec(cmd, (error) => {
-      if (error) return reject(error);
-      resolve();
-    });
-  });
-}
+    log("Uploading ZIP…");
 
-// ------------------------------
-// STREAMING ZIP PROCESSOR
-// ------------------------------
-app.post("/process", upload.single("zipfile"), async (req, res) => {
-  if (!req.file) return res.status(400).send("No ZIP uploaded.");
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", "/process", true);
+    xhr.responseType = "blob";
 
-  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "apt2u-"));
-  const inputZipPath = path.join(tmpRoot, "input.zip");
-  fs.writeFileSync(inputZipPath, req.file.buffer);
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) {
+        const percent = (event.loaded / event.total) * 100;
+        uploadStatus.textContent = `Uploading ZIP: ${percent.toFixed(1)}%`;
+      }
+    };
 
-  const outputZipPath = path.join(tmpRoot, "output.zip");
-  const outputStream = fs.createWriteStream(outputZipPath);
-  const archive = archiver("zip");
-  archive.pipe(outputStream);
+    xhr.onload = () => {
+      if (xhr.status === 200) {
+        uploadStatus.textContent = "Upload complete!";
+        log("Download ready.");
+        const blob = xhr.response;
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "apt2u_processed.zip";
+        a.click();
+      } else {
+        log("Error processing ZIP.");
+      }
+    };
 
-  let totalFiles = 0;
-  let processedFiles = 0;
-
-  // First pass: count files
-  await new Promise((resolve) => {
-    fs.createReadStream(inputZipPath)
-      .pipe(unzipper.Parse())
-      .on("entry", (entry) => {
-        if (!entry.path.endsWith("/")) totalFiles++;
-        entry.autodrain();
-      })
-      .on("close", resolve);
-  });
-
-  // Second pass: process files one-by-one
-  await new Promise((resolve) => {
-    fs.createReadStream(inputZipPath)
-      .pipe(unzipper.Parse())
-      .on("entry", async (entry) => {
-        if (entry.path.endsWith("/")) {
-          entry.autodrain();
-          return;
-        }
-
-        processedFiles++;
-
-        // ⭐ Send filename + progress
-        sendProgress(`Processing ${processedFiles} of ${totalFiles} :: ${entry.path}`);
-
-        const ext = path.extname(entry.path);
-        const base = path.basename(entry.path, ext);
-
-        const inPath = path.join(tmpRoot, `in_${processedFiles}${ext}`);
-        const outPath = path.join(tmpRoot, `out_${processedFiles}.wav`);
-
-        // Save file to disk
-        const writeStream = fs.createWriteStream(inPath);
-        entry.pipe(writeStream);
-
-        await new Promise((r) => writeStream.on("finish", r));
-
-        // Run FFmpeg
-        await runFFmpeg(inPath, outPath);
-
-        // Add processed WAV to output ZIP
-        archive.file(outPath, { name: `${base}.wav` });
-
-        // Cleanup
-        fs.unlinkSync(inPath);
-        fs.unlinkSync(outPath);
-      })
-      .on("close", resolve);
-  });
-
-  sendProgress("DONE");
-
-  archive.finalize();
-
-  outputStream.on("close", () => {
-    const finalZip = fs.readFileSync(outputZipPath);
-
-    res.set({
-      "Content-Type": "application/zip",
-      "Content-Disposition": "attachment; filename=apt2u_processed.zip"
-    });
-
-    res.send(finalZip);
-
-    fs.rmSync(tmpRoot, { recursive: true, force: true });
-  });
-});
-
-// ------------------------------
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () =>
-  console.log(`apt2u streaming server running on port ${PORT}`)
-);
+    xhr.send(formData);
+  };
+</script>
