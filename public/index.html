@@ -39,7 +39,7 @@
 <body>
 
   <h1>APT2U Audio Processor</h1>
-  <p>Upload MP4 files directly. They will be processed one at a time.</p>
+  <p>Upload MP4 files directly. Each WAV will download separately.</p>
 
   <input type="file" id="files" multiple accept="video/mp4">
 
@@ -89,15 +89,28 @@
         return;
       }
 
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
+      // Receive JSON with base64 WAVs
+      const results = await response.json();
 
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "apt2u_processed.zip";
-      a.click();
+      // Convert each base64 WAV to real WAV and download
+      for (const file of results) {
+        const byteCharacters = atob(file.buffer);
+        const byteNumbers = new Array(byteCharacters.length);
 
-      window.URL.revokeObjectURL(url);
+        for (let i = 0; i < byteCharacters.length; i++) {
+          byteNumbers[i] = byteCharacters.charCodeAt(i);
+        }
+
+        const byteArray = new Uint8Array(byteNumbers);
+        const blob = new Blob([byteArray], { type: "audio/wav" });
+
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = file.name;
+        a.click();
+        URL.revokeObjectURL(url);
+      }
     };
   </script>
 
