@@ -1,1 +1,137 @@
 
+<!DOCTYPE html>
+<html>
+<head>
+  <title>apt2u Batch Processor</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #f0f0f0;
+      padding: 40px;
+      margin: 0;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+    }
+    .box {
+      background: white;
+      padding: 30px;
+      border-radius: 12px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+      width: 400px;
+      text-align: center;
+    }
+    #progressBar {
+      width: 100%;
+      height: 20px;
+      background: #ddd;
+      border-radius: 10px;
+      overflow: hidden;
+      margin-top: 20px;
+    }
+    #progressFill {
+      height: 100%;
+      width: 0%;
+      background: #4a6cff;
+      transition: width 0.2s;
+    }
+    #console {
+      background: #111;
+      color: #0f0;
+      padding: 10px;
+      height: 150px;
+      overflow-y: auto;
+      margin-top: 20px;
+      font-family: monospace;
+      border-radius: 6px;
+    }
+    button {
+      margin-top: 20px;
+      padding: 10px 20px;
+      background: #4a6cff;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 16px;
+    }
+    button:hover {
+      background: #3a56d6;
+    }
+  </style>
+</head>
+<body>
+
+<div class="box">
+  <h2>apt2u Batch Processor</h2>
+
+  <form id="uploadForm" enctype="multipart/form-data">
+    <input type="file" name="files" id="files" multiple />
+    <button type="submit">Upload & Process</button>
+  </form>
+
+  <div id="progressBar"><div id="progressFill"></div></div>
+  <div id="console"></div>
+</div>
+
+<script>
+  const consoleBox = document.getElementById("console");
+  const progressFill = document.getElementById("progressFill");
+
+  function log(msg) {
+    consoleBox.innerHTML += msg + "<br>";
+    consoleBox.scrollTop = consoleBox.scrollHeight;
+  }
+
+  // Connect to SSE progress stream
+  const evtSource = new EventSource("/progress");
+  evtSource.onmessage = (e) => {
+    const msg = e.data;
+    log(msg);
+
+    if (msg.startsWith("Processing")) {
+      const parts = msg.split(" ");
+      const current = parseInt(parts[1]);
+      const total = parseInt(parts[3]);
+      const percent = (current / total) * 100;
+      progressFill.style.width = percent + "%";
+    }
+
+    if (msg === "DONE") {
+      progressFill.style.width = "100%";
+    }
+  };
+
+  // Upload handler
+  document.getElementById("uploadForm").onsubmit = async (e) => {
+    e.preventDefault();
+
+    const formData = new FormData();
+    const files = document.getElementById("files").files;
+
+    for (let f of files) formData.append("files", f);
+
+    log("Uploading files…");
+
+    const response = await fetch("/process", {
+      method: "POST",
+      body: formData
+    });
+
+    if (response.ok) {
+      log("Download ready.");
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "apt2u_processed.zip";
+      a.click();
+    } else {
+      log("Error processing files.");
+    }
+  };
+</script>
+
+</body>
+</html>
