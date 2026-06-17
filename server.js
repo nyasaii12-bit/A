@@ -10,8 +10,10 @@ const app = express();
 app.use(cors());
 app.use(express.static(path.join(__dirname, "public")));
 
+// Ensure uploads folder exists
 if (!fs.existsSync("uploads")) fs.mkdirSync("uploads");
 
+// Multer disk storage (safe for Render)
 const upload = multer({
   storage: multer.diskStorage({
     destination: (req, file, cb) => cb(null, "uploads/"),
@@ -31,12 +33,17 @@ app.post("/process", upload.array("files"), async (req, res) => {
     const ext = path.extname(file.originalname);
     const base = path.basename(file.originalname, ext);
 
-    const inPath = file.path; // THIS IS THE FIX
+    const inPath = file.path; // correct MP4 path
     const outPath = `uploads/${base}.wav`;
 
+    // FFmpeg with AI-style trimming + loudness normalization
     await new Promise((resolve, reject) => {
       const cmd =
-        `ffmpeg -y -i "${inPath}" -vn -acodec pcm_s16le -ar 44100 -ac 2 "${outPath}"`;
+        `ffmpeg -y -i "${inPath}" -af ` +
+        `"silenceremove=start_periods=1:start_silence=0.1:start_threshold=-40dB:` +
+        `stop_periods=1:stop_silence=0.1:stop_threshold=-40dB,` +
+        `dynaudnorm=f=75:g=5:p=0.9" ` +
+        `-acodec pcm_s16le -ar 44100 -ac 2 "${outPath}"`;
 
       exec(cmd, (err) => {
         if (err) return reject(err);
@@ -44,17 +51,21 @@ app.post("/process", upload.array("files"), async (req, res) => {
       });
     });
 
+    // Read WAV as binary
     const wavBuffer = fs.readFileSync(outPath);
 
+    // Push base64 WAV to results
     results.push({
       name: `${base}.wav`,
       buffer: wavBuffer.toString("base64")
     });
 
+    // Cleanup
     fs.unlinkSync(inPath);
     fs.unlinkSync(outPath);
   }
 
+  // Send all WAVs as JSON
   res.json(results);
 });
 
