@@ -33,16 +33,16 @@ app.post("/process", upload.array("files"), async (req, res) => {
     const ext = path.extname(file.originalname);
     const base = path.basename(file.originalname, ext);
 
-    const inPath = file.path; // correct MP4 path
+    const inPath = file.path;
     const outPath = `uploads/${base}.wav`;
 
-    // FFmpeg with AI-style trimming + loudness normalization
+    // FFmpeg: Normalize FIRST, then trim (safe settings)
     await new Promise((resolve, reject) => {
       const cmd =
         `ffmpeg -y -i "${inPath}" -af ` +
-        `"silenceremove=start_periods=1:start_silence=0.1:start_threshold=-40dB:` +
-        `stop_periods=1:stop_silence=0.1:stop_threshold=-40dB,` +
-        `dynaudnorm=f=75:g=5:p=0.9" ` +
+        `"dynaudnorm=f=150:g=3:p=0.95,` +
+        `silenceremove=start_periods=1:start_silence=0.35:start_threshold=-55dB:` +
+        `stop_periods=1:stop_silence=0.35:stop_threshold=-55dB" ` +
         `-acodec pcm_s16le -ar 44100 -ac 2 "${outPath}"`;
 
       exec(cmd, (err) => {
@@ -54,7 +54,6 @@ app.post("/process", upload.array("files"), async (req, res) => {
     // Read WAV as binary
     const wavBuffer = fs.readFileSync(outPath);
 
-    // Push base64 WAV to results
     results.push({
       name: `${base}.wav`,
       buffer: wavBuffer.toString("base64")
@@ -65,7 +64,6 @@ app.post("/process", upload.array("files"), async (req, res) => {
     fs.unlinkSync(outPath);
   }
 
-  // Send all WAVs as JSON
   res.json(results);
 });
 
