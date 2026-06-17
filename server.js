@@ -1,6 +1,5 @@
 const express = require("express");
 const multer = require("multer");
-const yauzl = require("yauzl");
 const archiver = require("archiver");
 const cors = require("cors");
 const path = require("path");
@@ -15,11 +14,8 @@ app.use(express.static(path.join(__dirname, "public")));
 
 const upload = multer({ storage: multer.memoryStorage() });
 
-// ------------------------------
-// SSE Progress
-// ------------------------------
+// SSE progress
 let clients = [];
-
 app.get("/progress", (req, res) => {
   res.set({
     "Content-Type": "text/event-stream",
@@ -39,9 +35,7 @@ function send(msg) {
   clients.forEach(c => c.write(`data: ${msg}\n\n`));
 }
 
-// ------------------------------
-// FFmpeg
-// ------------------------------
+// FFmpeg processor
 function runFFmpeg(inputPath, outputPath) {
   return new Promise((resolve, reject) => {
     const cmd =
@@ -58,85 +52,43 @@ function runFFmpeg(inputPath, outputPath) {
   });
 }
 
-// ------------------------------
-// TRUE STREAMING ZIP PROCESSOR
-// ------------------------------
-app.post("/process", upload.single("zipfile"), async (req, res) => {
-  if (!req.file) return res.status(400).send("No ZIP uploaded.");
+// MAIN ENDPOINT — upload MP4s directly
+app.post("/process", upload.array("files"), async (req, res) => {
+  if (!req.files || req.files.length === 0)
+    return res.status(400).send("No MP4s uploaded.");
 
   const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "apt2u-"));
-  const zipPath = path.join(tmpRoot, "input.zip");
-  fs.writeFileSync(zipPath, req.file.buffer);
-
   const outputZipPath = path.join(tmpRoot, "output.zip");
+
   const outputStream = fs.createWriteStream(outputZipPath);
   const archive = archiver("zip");
   archive.pipe(outputStream);
 
-  // Open ZIP in streaming mode
-  const zip = await new Promise((resolve, reject) => {
-    yauzl.open(zipPath, { lazyEntries: true }, (err, zipfile) => {
-      if (err) reject(err);
-      else resolve(zipfile);
-    });
-  });
-
-  let total = 0;
+  const total = req.files.length;
   let processed = 0;
 
-  // First pass: count entries
-  await new Promise((resolve) => {
-    yauzl.open(zipPath, { lazyEntries: true }, (err, z) => {
-      z.readEntry();
-      z.on("entry", (entry) => {
-        if (!entry.fileName.endsWith("/")) total++;
-        z.readEntry();
-      });
-      z.on("end", resolve);
-    });
-  });
-
-  // Second pass: process entries one-by-one
-  zip.readEntry();
-
-  zip.on("entry", (entry) => {
-    if (entry.fileName.endsWith("/")) {
-      zip.readEntry();
-      return;
-    }
-
+  for (const file of req.files) {
     processed++;
-    send(`Processing ${processed} of ${total} :: ${entry.fileName}`);
+    send(`Processing ${processed} of ${total} :: ${file.originalname}`);
 
-    const ext = path.extname(entry.fileName);
-    const base = path.basename(entry.fileName, ext);
+    const ext = path.extname(file.originalname);
+    const base = path.basename(file.originalname, ext);
 
     const inPath = path.join(tmpRoot, `in_${processed}${ext}`);
     const outPath = path.join(tmpRoot, `out_${processed}.wav`);
 
-    zip.openReadStream(entry, async (err, readStream) => {
-      if (err) throw err;
+    fs.writeFileSync(inPath, file.buffer);
 
-      const writeStream = fs.createWriteStream(inPath);
-      readStream.pipe(writeStream);
+    await runFFmpeg(inPath, outPath);
 
-      writeStream.on("finish", async () => {
-        await runFFmpeg(inPath, outPath);
+    archive.file(outPath, { name: `${base}.wav` });
 
-        archive.file(outPath, { name: `${base}.wav` });
+    fs.unlinkSync(inPath);
+    fs.unlinkSync(outPath);
+  }
 
-        fs.unlinkSync(inPath);
-        fs.unlinkSync(outPath);
-
-        zip.readEntry();
-      });
-    });
-  });
-
-  zip.on("end", () => {
-    send("DONE");
-    archive.finalize();
-  });
+  send("DONE");
+  archive.finalize();
 
   outputStream.on("close", () => {
     const finalZip = fs.readFileSync(outputZipPath);
@@ -152,8 +104,7 @@ app.post("/process", upload.single("zipfile"), async (req, res) => {
   });
 });
 
-// ------------------------------
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () =>
-  console.log(`apt2u TRUE streaming server running on port ${PORT}`)
+  console.log(`apt2u MP4 direct-upload server running on port ${PORT}`)
 );
