@@ -20,7 +20,7 @@ const upload = multer({
   })
 });
 
-// Process MP4s and return WAVs one by one
+// Process MP4s and return WAVs separately
 app.post("/process", upload.array("files"), async (req, res) => {
   if (!req.files || req.files.length === 0)
     return res.status(400).send("No MP4s uploaded.");
@@ -47,11 +47,11 @@ app.post("/process", upload.array("files"), async (req, res) => {
       });
     });
 
-    const wavData = fs.readFileSync(outPath);
+    const wavBuffer = fs.readFileSync(outPath);
 
     results.push({
       name: `${base}.wav`,
-      data: wavData.toString("base64")
+      buffer: wavBuffer.toString("base64")
     });
 
     fs.unlinkSync(inPath);
