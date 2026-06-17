@@ -1,68 +1,3 @@
-<!DOCTYPE html>
-<html>
-<head>
-  <title>apt2u ZIP Processor</title>
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      background: #f0f0f0;
-      padding: 40px;
-      margin: 0;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      height: 100vh;
-    }
-    .box {
-      background: white;
-      padding: 30px;
-      border-radius: 12px;
-      box-shadow: 0 4px 20px rgba(0,0,0,0.1);
-      width: 420px;
-      text-align: center;
-    }
-    #console {
-      background: #111;
-      color: #0f0;
-      padding: 10px;
-      height: 180px;
-      overflow-y: auto;
-      margin-top: 20px;
-      font-family: monospace;
-      border-radius: 6px;
-      text-align: left;
-    }
-    button {
-      margin-top: 20px;
-      padding: 10px 20px;
-      background: #4a6cff;
-      color: white;
-      border: none;
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 16px;
-    }
-    button:hover {
-      background: #3a56d6;
-    }
-  </style>
-</head>
-<body>
-
-<div class="box">
-  <h2>apt2u ZIP Processor</h2>
-
-  <form id="uploadForm" enctype="multipart/form-data">
-    <input type="file" name="zipfile" id="zipfile" accept=".zip" />
-    <button type="submit">Upload ZIP & Process</button>
-  </form>
-
-  <p id="uploadStatus">Waiting for upload…</p>
-  <p id="processStatus">Waiting for processing…</p>
-
-  <div id="console"></div>
-</div>
-
 <script>
   const consoleBox = document.getElementById("console");
   const uploadStatus = document.getElementById("uploadStatus");
@@ -80,12 +15,19 @@
     log(msg);
 
     if (msg.startsWith("Processing")) {
-      const parts = msg.split(" ");
-      const current = parseInt(parts[1]);
-      const total = parseInt(parts[3]);
+      // Format: "Processing X of Y :: filename"
+      const parts = msg.split(" :: ");
+      const progressPart = parts[0];
+      const fileName = parts[1] || "Unknown";
+
+      const nums = progressPart.split(" ");
+      const current = parseInt(nums[1]);
+      const total = parseInt(nums[3]);
       const percent = (current / total) * 100;
 
-      processStatus.textContent = `Processing: ${current} of ${total} (${percent.toFixed(1)}%)`;
+      processStatus.textContent =
+        `Processing: ${current} of ${total} (${percent.toFixed(1)}%)\n` +
+        `Current file: ${fileName}`;
     }
 
     if (msg === "DONE") {
@@ -137,6 +79,3 @@
     xhr.send(formData);
   };
 </script>
-
-</body>
-</html>
