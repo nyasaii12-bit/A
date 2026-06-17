@@ -1,146 +1,105 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <title>apt2u ZIP Processor</title>
+  <meta charset="UTF-8">
+  <title>APT2U Audio Processor</title>
   <style>
     body {
       font-family: Arial, sans-serif;
-      background: #f0f0f0;
-      padding: 40px;
-      margin: 0;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      height: 100vh;
-    }
-    .box {
-      background: white;
-      padding: 30px;
-      border-radius: 12px;
-      box-shadow: 0 4px 20px rgba(0,0,0,0.1);
-      width: 420px;
-      text-align: center;
-    }
-    #console {
       background: #111;
-      color: #0f0;
-      padding: 10px;
-      height: 180px;
-      overflow-y: auto;
+      color: #fff;
+      text-align: center;
+      padding: 40px;
+    }
+    #progressBox {
       margin-top: 20px;
-      font-family: monospace;
-      border-radius: 6px;
-      text-align: left;
+      padding: 15px;
+      background: #222;
+      border-radius: 8px;
+      display: none;
+      white-space: pre-line;
     }
     button {
-      margin-top: 20px;
-      padding: 10px 20px;
-      background: #4a6cff;
-      color: white;
+      padding: 12px 20px;
       border: none;
+      background: #4CAF50;
+      color: white;
+      font-size: 16px;
       border-radius: 6px;
       cursor: pointer;
-      font-size: 16px;
     }
     button:hover {
-      background: #3a56d6;
+      background: #45a049;
+    }
+    input {
+      margin: 20px 0;
     }
   </style>
 </head>
 <body>
 
-<div class="box">
-  <h2>apt2u ZIP Processor</h2>
+  <h1>APT2U Audio Processor</h1>
+  <p>Upload MP4 files directly. They will be processed one at a time.</p>
 
-  <form id="uploadForm" enctype="multipart/form-data">
-    <input type="file" name="zipfile" id="zipfile" accept=".zip" />
-    <button type="submit">Upload ZIP & Process</button>
-  </form>
+  <input type="file" id="files" multiple accept="video/mp4">
 
-  <p id="uploadStatus">Waiting for upload…</p>
-  <p id="processStatus">Waiting for processing…</p>
+  <br>
+  <button id="processBtn">Process Files</button>
 
-  <div id="console"></div>
-</div>
+  <div id="progressBox"></div>
 
-<script>
-  const consoleBox = document.getElementById("console");
-  const uploadStatus = document.getElementById("uploadStatus");
-  const processStatus = document.getElementById("processStatus");
+  <script>
+    const progressBox = document.getElementById("progressBox");
 
-  function log(msg) {
-    consoleBox.innerHTML += msg + "<br>";
-    consoleBox.scrollTop = consoleBox.scrollHeight;
-  }
+    // Listen to SSE progress
+    function startProgressStream() {
+      const evtSource = new EventSource("/progress");
+      evtSource.onmessage = (e) => {
+        progressBox.style.display = "block";
+        progressBox.textContent = e.data;
 
-  const evtSource = new EventSource("/progress");
-  evtSource.onmessage = (e) => {
-    const msg = e.data;
-    log(msg);
-
-    if (msg.startsWith("Processing")) {
-      const parts = msg.split(" :: ");
-      const progressPart = parts[0];
-      const fileName = parts[1] || "Unknown";
-
-      const nums = progressPart.split(" ");
-      const current = parseInt(nums[1]);
-      const total = parseInt(nums[3]);
-      const percent = (current / total) * 100;
-
-      processStatus.innerHTML =
-        `Processing: ${current} of ${total} (${percent.toFixed(1)}%)<br>` +
-        `Current file: ${fileName}`;
+        if (e.data === "DONE") {
+          evtSource.close();
+        }
+      };
     }
 
-    if (msg === "DONE") {
-      processStatus.textContent = "Processing complete!";
-    }
-  };
+    document.getElementById("processBtn").onclick = async () => {
+      const files = document.getElementById("files").files;
 
-  document.getElementById("uploadForm").onsubmit = async (e) => {
-    e.preventDefault();
-
-    const file = document.getElementById("zipfile").files[0];
-    if (!file) {
-      log("Please select a ZIP file.");
-      return;
-    }
-
-    const formData = new FormData();
-    formData.append("zipfile", file);
-
-    log("Uploading ZIP…");
-
-    const xhr = new XMLHttpRequest();
-    xhr.open("POST", "/process", true);
-    xhr.responseType = "blob";
-
-    xhr.upload.onprogress = (event) => {
-      if (event.lengthComputable) {
-        const percent = (event.loaded / event.total) * 100;
-        uploadStatus.textContent = `Uploading ZIP: ${percent.toFixed(1)}%`;
+      if (!files.length) {
+        alert("Please select MP4 files first.");
+        return;
       }
-    };
 
-    xhr.onload = () => {
-      if (xhr.status === 200) {
-        uploadStatus.textContent = "Upload complete!";
-        log("Download ready.");
-        const blob = xhr.response;
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = "apt2u_processed.zip";
-        a.click();
-      } else {
-        log("Error processing ZIP.");
+      const formData = new FormData();
+      for (const file of files) {
+        formData.append("files", file);
       }
-    };
 
-    xhr.send(formData);
-  };
-</script>
+      startProgressStream();
+
+      const response = await fetch("/process", {
+        method: "POST",
+        body: formData
+      });
+
+      if (!response.ok) {
+        alert("Processing failed.");
+        return;
+      }
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "apt2u_processed.zip";
+      a.click();
+
+      window.URL.revokeObjectURL(url);
+    };
+  </script>
 
 </body>
 </html>
