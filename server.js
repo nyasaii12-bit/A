@@ -1,6 +1,6 @@
 const express = require("express");
 const multer = require("multer");
-const unzipper = require("unzipper");
+const yauzl = require("yauzl");
 const archiver = require("archiver");
 const cors = require("cors");
 const path = require("path");
@@ -10,16 +10,15 @@ const os = require("os");
 
 const app = express();
 
-// ⭐ THIS LINE MAKES THE UI WORK — DO NOT REMOVE
 app.use(cors());
 app.use(express.static(path.join(__dirname, "public")));
 
 const upload = multer({ storage: multer.memoryStorage() });
 
 // ------------------------------
-// SSE Progress Stream
+// SSE Progress
 // ------------------------------
-let progressClients = [];
+let clients = [];
 
 app.get("/progress", (req, res) => {
   res.set({
@@ -29,19 +28,19 @@ app.get("/progress", (req, res) => {
   });
 
   res.flushHeaders();
-  progressClients.push(res);
+  clients.push(res);
 
   req.on("close", () => {
-    progressClients = progressClients.filter(c => c !== res);
+    clients = clients.filter(c => c !== res);
   });
 });
 
-function sendProgress(msg) {
-  progressClients.forEach(res => res.write(`data: ${msg}\n\n`));
+function send(msg) {
+  clients.forEach(c => c.write(`data: ${msg}\n\n`));
 }
 
 // ------------------------------
-// FFmpeg Processor
+// FFmpeg
 // ------------------------------
 function runFFmpeg(inputPath, outputPath) {
   return new Promise((resolve, reject) => {
@@ -49,85 +48,95 @@ function runFFmpeg(inputPath, outputPath) {
       `ffmpeg -y -i "${inputPath}" -af ` +
       `"silenceremove=start_periods=1:start_silence=0.1:start_threshold=-40dB:` +
       `stop_periods=1:stop_silence=0.1:stop_threshold=-40dB,` +
-      `dynaudnorm=f=75:g=15,` +
-      `aformat=sample_fmts=s16:sample_rates=44100" ` +
+      `dynaudnorm=f=50:g=10" ` +
       `"${outputPath}"`;
 
-    exec(cmd, (error) => {
-      if (error) return reject(error);
+    exec(cmd, (err) => {
+      if (err) return reject(err);
       resolve();
     });
   });
 }
 
 // ------------------------------
-// STREAMING ZIP PROCESSOR
+// TRUE STREAMING ZIP PROCESSOR
 // ------------------------------
 app.post("/process", upload.single("zipfile"), async (req, res) => {
   if (!req.file) return res.status(400).send("No ZIP uploaded.");
 
   const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "apt2u-"));
-  const inputZipPath = path.join(tmpRoot, "input.zip");
-  fs.writeFileSync(inputZipPath, req.file.buffer);
+  const zipPath = path.join(tmpRoot, "input.zip");
+  fs.writeFileSync(zipPath, req.file.buffer);
 
   const outputZipPath = path.join(tmpRoot, "output.zip");
   const outputStream = fs.createWriteStream(outputZipPath);
   const archive = archiver("zip");
   archive.pipe(outputStream);
 
-  let totalFiles = 0;
-  let processedFiles = 0;
-
-  // Count files
-  await new Promise((resolve) => {
-    fs.createReadStream(inputZipPath)
-      .pipe(unzipper.Parse())
-      .on("entry", (entry) => {
-        if (!entry.path.endsWith("/")) totalFiles++;
-        entry.autodrain();
-      })
-      .on("close", resolve);
+  // Open ZIP in streaming mode
+  const zip = await new Promise((resolve, reject) => {
+    yauzl.open(zipPath, { lazyEntries: true }, (err, zipfile) => {
+      if (err) reject(err);
+      else resolve(zipfile);
+    });
   });
 
-  // Process files
+  let total = 0;
+  let processed = 0;
+
+  // First pass: count entries
   await new Promise((resolve) => {
-    fs.createReadStream(inputZipPath)
-      .pipe(unzipper.Parse())
-      .on("entry", async (entry) => {
-        if (entry.path.endsWith("/")) {
-          entry.autodrain();
-          return;
-        }
+    yauzl.open(zipPath, { lazyEntries: true }, (err, z) => {
+      z.readEntry();
+      z.on("entry", (entry) => {
+        if (!entry.fileName.endsWith("/")) total++;
+        z.readEntry();
+      });
+      z.on("end", resolve);
+    });
+  });
 
-        processedFiles++;
+  // Second pass: process entries one-by-one
+  zip.readEntry();
 
-        // ⭐ Send progress + filename
-        sendProgress(`Processing ${processedFiles} of ${totalFiles} :: ${entry.path}`);
+  zip.on("entry", (entry) => {
+    if (entry.fileName.endsWith("/")) {
+      zip.readEntry();
+      return;
+    }
 
-        const ext = path.extname(entry.path);
-        const base = path.basename(entry.path, ext);
+    processed++;
+    send(`Processing ${processed} of ${total} :: ${entry.fileName}`);
 
-        const inPath = path.join(tmpRoot, `in_${processedFiles}${ext}`);
-        const outPath = path.join(tmpRoot, `out_${processedFiles}.wav`);
+    const ext = path.extname(entry.fileName);
+    const base = path.basename(entry.fileName, ext);
 
-        const writeStream = fs.createWriteStream(inPath);
-        entry.pipe(writeStream);
+    const inPath = path.join(tmpRoot, `in_${processed}${ext}`);
+    const outPath = path.join(tmpRoot, `out_${processed}.wav`);
 
-        await new Promise((r) => writeStream.on("finish", r));
+    zip.openReadStream(entry, async (err, readStream) => {
+      if (err) throw err;
 
+      const writeStream = fs.createWriteStream(inPath);
+      readStream.pipe(writeStream);
+
+      writeStream.on("finish", async () => {
         await runFFmpeg(inPath, outPath);
 
         archive.file(outPath, { name: `${base}.wav` });
 
         fs.unlinkSync(inPath);
         fs.unlinkSync(outPath);
-      })
-      .on("close", resolve);
+
+        zip.readEntry();
+      });
+    });
   });
 
-  sendProgress("DONE");
-
-  archive.finalize();
+  zip.on("end", () => {
+    send("DONE");
+    archive.finalize();
+  });
 
   outputStream.on("close", () => {
     const finalZip = fs.readFileSync(outputZipPath);
@@ -146,5 +155,5 @@ app.post("/process", upload.single("zipfile"), async (req, res) => {
 // ------------------------------
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () =>
-  console.log(`apt2u streaming server running on port ${PORT}`)
+  console.log(`apt2u TRUE streaming server running on port ${PORT}`)
 );
