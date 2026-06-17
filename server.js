@@ -1,6 +1,7 @@
 const express = require("express");
 const multer = require("multer");
-const JSZip = require("jszip");
+const unzipper = require("unzipper");
+const archiver = require("archiver");
 const cors = require("cors");
 const path = require("path");
 const { exec } = require("child_process");
@@ -43,14 +44,15 @@ function sendProgress(msg) {
 // ------------------------------
 function runFFmpeg(inputPath, outputPath) {
   return new Promise((resolve, reject) => {
-    const cmd = `ffmpeg -y -i "${inputPath}" -af ` +
+    const cmd =
+      `ffmpeg -y -i "${inputPath}" -af ` +
       `"silenceremove=start_periods=1:start_silence=0.1:start_threshold=-40dB:` +
       `stop_periods=1:stop_silence=0.1:stop_threshold=-40dB,` +
       `dynaudnorm=f=75:g=15,` +
       `aformat=sample_fmts=s16:sample_rates=44100" ` +
       `"${outputPath}"`;
 
-    exec(cmd, (error, stdout, stderr) => {
+    exec(cmd, (error) => {
       if (error) return reject(error);
       resolve();
     });
@@ -58,52 +60,79 @@ function runFFmpeg(inputPath, outputPath) {
 }
 
 // ------------------------------
-// ZIP Upload Processor
+// STREAMING ZIP PROCESSOR
 // ------------------------------
 app.post("/process", upload.single("zipfile"), async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).send("No ZIP uploaded.");
-    }
+  if (!req.file) return res.status(400).send("No ZIP uploaded.");
 
-    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "apt2u-"));
-    const inputZip = new JSZip();
-    const loadedZip = await inputZip.loadAsync(req.file.buffer);
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "apt2u-"));
+  const inputZipPath = path.join(tmpRoot, "input.zip");
+  fs.writeFileSync(inputZipPath, req.file.buffer);
 
-    const outputZip = new JSZip();
-    const fileNames = Object.keys(loadedZip.files);
-    const total = fileNames.length;
+  const outputZipPath = path.join(tmpRoot, "output.zip");
+  const outputStream = fs.createWriteStream(outputZipPath);
+  const archive = archiver("zip");
 
-    let index = 0;
+  archive.pipe(outputStream);
 
-    for (const name of fileNames) {
-      index++;
-      sendProgress(`Processing ${index} of ${total}: ${name}`);
+  let totalFiles = 0;
+  let processedFiles = 0;
 
-      const file = loadedZip.files[name];
-      if (file.dir) continue;
+  // First pass: count files
+  await new Promise((resolve) => {
+    fs.createReadStream(inputZipPath)
+      .pipe(unzipper.Parse())
+      .on("entry", (entry) => {
+        if (!entry.path.endsWith("/")) totalFiles++;
+        entry.autodrain();
+      })
+      .on("close", resolve);
+  });
 
-      const rawBuffer = await file.async("nodebuffer");
+  // Second pass: process files one-by-one
+  await new Promise((resolve) => {
+    fs.createReadStream(inputZipPath)
+      .pipe(unzipper.Parse())
+      .on("entry", async (entry) => {
+        if (entry.path.endsWith("/")) {
+          entry.autodrain();
+          return;
+        }
 
-      const inPath = path.join(tmpRoot, `in_${index}${path.extname(name) || ".mp4"}`);
-      const outPath = path.join(tmpRoot, `out_${index}.wav`);
+        processedFiles++;
+        sendProgress(`Processing ${processedFiles} of ${totalFiles}`);
 
-      fs.writeFileSync(inPath, rawBuffer);
+        const ext = path.extname(entry.path);
+        const base = path.basename(entry.path, ext);
 
-      await runFFmpeg(inPath, outPath);
+        const inPath = path.join(tmpRoot, `in_${processedFiles}${ext}`);
+        const outPath = path.join(tmpRoot, `out_${processedFiles}.wav`);
 
-      const processedBuffer = fs.readFileSync(outPath);
-      const outName = path.basename(name, path.extname(name)) + ".wav";
+        // Save file to disk
+        const writeStream = fs.createWriteStream(inPath);
+        entry.pipe(writeStream);
 
-      outputZip.file(outName, processedBuffer);
+        await new Promise((r) => writeStream.on("finish", r));
 
-      fs.unlinkSync(inPath);
-      fs.unlinkSync(outPath);
-    }
+        // Run FFmpeg
+        await runFFmpeg(inPath, outPath);
 
-    sendProgress("DONE");
+        // Add processed WAV to output ZIP
+        archive.file(outPath, { name: `${base}.wav` });
 
-    const finalZip = await outputZip.generateAsync({ type: "nodebuffer" });
+        // Cleanup
+        fs.unlinkSync(inPath);
+        fs.unlinkSync(outPath);
+      })
+      .on("close", resolve);
+  });
+
+  sendProgress("DONE");
+
+  archive.finalize();
+
+  outputStream.on("close", () => {
+    const finalZip = fs.readFileSync(outputZipPath);
 
     res.set({
       "Content-Type": "application/zip",
@@ -113,14 +142,9 @@ app.post("/process", upload.single("zipfile"), async (req, res) => {
     res.send(finalZip);
 
     fs.rmSync(tmpRoot, { recursive: true, force: true });
-
-  } catch (err) {
-    console.error("ZIP processing error:", err);
-    sendProgress("ERROR");
-    res.status(500).send("Server error while processing ZIP.");
-  }
+  });
 });
 
 // ------------------------------
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`apt2u ZIP server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`apt2u streaming server running on port ${PORT}`));
