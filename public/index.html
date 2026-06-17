@@ -83,7 +83,6 @@
     consoleBox.scrollTop = consoleBox.scrollHeight;
   }
 
-  // Connect to SSE progress stream
   const evtSource = new EventSource("/progress");
   evtSource.onmessage = (e) => {
     const msg = e.data;
@@ -102,7 +101,6 @@
     }
   };
 
-  // Upload handler
   document.getElementById("uploadForm").onsubmit = async (e) => {
     e.preventDefault();
 
