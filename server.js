@@ -6,17 +6,13 @@ const path = require("path");
 
 const app = express();
 
-// Allow UI to connect
 app.use(cors());
-
-// Serve UI from /public
 app.use(express.static("public"));
 
-// Multer memory storage for batch uploads
 const upload = multer({ storage: multer.memoryStorage() });
 
 // ------------------------------
-// SSE (Server‑Sent Events) Setup
+// SSE Progress Stream
 // ------------------------------
 let progressClients = [];
 
@@ -40,52 +36,56 @@ function sendProgress(msg) {
 }
 
 // ------------------------------
-// Batch Processor
+// ZIP Upload Processor
 // ------------------------------
-app.post("/process", upload.array("files"), async (req, res) => {
+app.post("/process", upload.single("zipfile"), async (req, res) => {
   try {
-    if (!req.files || req.files.length === 0) {
-      return res.status(400).send("No files uploaded.");
+    if (!req.file) {
+      return res.status(400).send("No ZIP uploaded.");
     }
 
-    const zip = new JSZip();
-    const total = req.files.length;
+    const inputZip = new JSZip();
+    const loadedZip = await inputZip.loadAsync(req.file.buffer);
 
-    for (let i = 0; i < total; i++) {
-      const file = req.files[i];
+    const outputZip = new JSZip();
+    const fileNames = Object.keys(loadedZip.files);
+    const total = fileNames.length;
 
-      // Send progress update to UI
-      sendProgress(`Processing ${i + 1} of ${total}: ${file.originalname}`);
+    let index = 0;
 
-      // Placeholder for real processing logic
-      const processedBuffer = file.buffer;
+    for (const name of fileNames) {
+      index++;
 
-      zip.file(file.originalname, processedBuffer);
+      sendProgress(`Processing ${index} of ${total}: ${name}`);
 
-      // Simulate processing time
-      await new Promise(r => setTimeout(r, 150));
+      const fileData = await loadedZip.files[name].async("nodebuffer");
+
+      // Placeholder for real processing
+      const processed = fileData;
+
+      outputZip.file(name, processed);
+
+      await new Promise(r => setTimeout(r, 100));
     }
 
     sendProgress("DONE");
 
-    const zipData = await zip.generateAsync({ type: "nodebuffer" });
+    const finalZip = await outputZip.generateAsync({ type: "nodebuffer" });
 
     res.set({
       "Content-Type": "application/zip",
       "Content-Disposition": "attachment; filename=apt2u_processed.zip"
     });
 
-    res.send(zipData);
+    res.send(finalZip);
 
   } catch (err) {
-    console.error("Processing error:", err);
+    console.error("ZIP processing error:", err);
     sendProgress("ERROR");
-    res.status(500).send("Server error while processing files.");
+    res.status(500).send("Server error while processing ZIP.");
   }
 });
 
 // ------------------------------
-// Start Server
-// ------------------------------
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`apt2u server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`apt2u ZIP server running on port ${PORT}`));
