@@ -31,15 +31,12 @@ app.post("/process", upload.array("files"), async (req, res) => {
     const ext = path.extname(file.originalname);
     const base = path.basename(file.originalname, ext);
 
-    const inPath = file.path;
+    const inPath = file.path; // THIS IS THE FIX
     const outPath = `uploads/${base}.wav`;
 
     await new Promise((resolve, reject) => {
       const cmd =
-        `ffmpeg -y -i "${inPath}" -af ` +
-        `"silenceremove=start_periods=1:start_silence=0.1:start_threshold=-40dB:` +
-        `stop_periods=1:stop_silence=0.1:stop_threshold=-40dB,` +
-        `dynaudnorm=f=50:g=10" "${outPath}"`;
+        `ffmpeg -y -i "${inPath}" -vn -acodec pcm_s16le -ar 44100 -ac 2 "${outPath}"`;
 
       exec(cmd, (err) => {
         if (err) return reject(err);
