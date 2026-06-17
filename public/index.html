@@ -73,14 +73,12 @@
     consoleBox.scrollTop = consoleBox.scrollHeight;
   }
 
-  // SSE for server processing progress
   const evtSource = new EventSource("/progress");
   evtSource.onmessage = (e) => {
     const msg = e.data;
     log(msg);
 
     if (msg.startsWith("Processing")) {
-      // Format: "Processing X of Y :: filename"
       const parts = msg.split(" :: ");
       const progressPart = parts[0];
       const fileName = parts[1] || "Unknown";
@@ -100,7 +98,6 @@
     }
   };
 
-  // Upload handler with progress
   document.getElementById("uploadForm").onsubmit = async (e) => {
     e.preventDefault();
 
