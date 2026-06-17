@@ -12,7 +12,19 @@ const app = express();
 app.use(cors());
 app.use(express.static(path.join(__dirname, "public")));
 
-const upload = multer({ storage: multer.memoryStorage() });
+// Ensure uploads folder exists
+if (!fs.existsSync("uploads")) {
+  fs.mkdirSync("uploads");
+}
+
+// Multer disk storage (FIXES EMPTY ZIP ISSUE)
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, "uploads/"),
+    filename: (req, file, cb) =>
+      cb(null, Date.now() + "-" + file.originalname)
+  })
+});
 
 // SSE progress
 let clients = [];
@@ -74,17 +86,15 @@ app.post("/process", upload.array("files"), async (req, res) => {
     const ext = path.extname(file.originalname);
     const base = path.basename(file.originalname, ext);
 
-    const inPath = path.join(tmpRoot, `in_${processed}${ext}`);
-    const outPath = path.join(tmpRoot, `out_${processed}.wav`);
-
-    fs.writeFileSync(inPath, file.buffer);
+    const inPath = file.path; // already saved by multer
+    const outPath = path.join(tmpRoot, `${base}.wav`);
 
     await runFFmpeg(inPath, outPath);
 
     archive.file(outPath, { name: `${base}.wav` });
 
-    fs.unlinkSync(inPath);
-    fs.unlinkSync(outPath);
+    fs.unlinkSync(inPath); // delete uploaded MP4
+    fs.unlinkSync(outPath); // delete WAV after adding to ZIP
   }
 
   send("DONE");
