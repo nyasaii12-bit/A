@@ -10,8 +10,9 @@ const os = require("os");
 
 const app = express();
 
+// ⭐ REQUIRED: This serves your UI again
 app.use(cors());
-app.use(express.static("public"));
+app.use(express.static(path.join(__dirname, "public")));
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -72,7 +73,6 @@ app.post("/process", upload.single("zipfile"), async (req, res) => {
   const outputZipPath = path.join(tmpRoot, "output.zip");
   const outputStream = fs.createWriteStream(outputZipPath);
   const archive = archiver("zip");
-
   archive.pipe(outputStream);
 
   let totalFiles = 0;
@@ -100,7 +100,9 @@ app.post("/process", upload.single("zipfile"), async (req, res) => {
         }
 
         processedFiles++;
-        sendProgress(`Processing ${processedFiles} of ${totalFiles}`);
+
+        // ⭐ Send filename + progress
+        sendProgress(`Processing ${processedFiles} of ${totalFiles} :: ${entry.path}`);
 
         const ext = path.extname(entry.path);
         const base = path.basename(entry.path, ext);
@@ -147,4 +149,6 @@ app.post("/process", upload.single("zipfile"), async (req, res) => {
 
 // ------------------------------
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`apt2u streaming server running on port ${PORT}`));
+app.listen(PORT, () =>
+  console.log(`apt2u streaming server running on port ${PORT}`)
+);
